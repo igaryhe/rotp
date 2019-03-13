@@ -1,6 +1,6 @@
 * ROTP: An OTP command line tool written in Rust
 ** Functions
 - RFC 4226 HOTP
-- RFC 6238 TOTP(sha256 and sha512 are still work in progress)
+- RFC 6238 TOTP(HMAC-SHA256 and HMAC-SHA512 are fully supported)
 - Steam Guard Verification Code
 - Fully functional command line prompt

@@ -145,7 +145,7 @@ fn main() {
         let period = u64::from_str(matches.value_of("period").unwrap()).unwrap();
         let algo = matches.value_of("algorithm").unwrap().into();
         let num = u32::from_str(digits);
-        if (digits == "s") {
+        if digits == "s" {
             let out = totp(secret, period, Digits::Steam, algo);
             println!("{}", out);
         } else {
