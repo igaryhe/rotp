@@ -3,5 +3,4 @@
 - RFC 4226 HOTP
 - RFC 6238 TOTP(sha256 and sha512 are still work in progress)
 - Steam Guard Verification Code
-** Work in Progress
-- CUI
+- Fully functional command line prompt

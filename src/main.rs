@@ -6,6 +6,8 @@ use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 use std::io::Cursor;
 use time::get_time;
 use std::string::String;
+use clap::{App, load_yaml};
+use std::str::FromStr;
 
 enum Digits {
     Steam,
@@ -73,4 +75,30 @@ fn totp(secret: &str, time_step: u64, digits: Digits) -> String {
 }
 
 fn main() {
+    let yaml = load_yaml!("cli.yaml");
+    let matches = App::from_yaml(yaml).get_matches();
+    if matches.is_present("hotp") {
+        let counter = u64::from_str(matches.value_of("counter").unwrap()).unwrap();
+        let secret = matches.value_of("secret").unwrap();
+        let digits = u32::from_str(matches.value_of("digits").unwrap()).unwrap();
+        let out = hotp(secret, counter, Digits::Digit(digits));
+        println!("{}", out);
+    }
+    if matches.is_present("totp") {
+        let secret = matches.value_of("secret").unwrap();
+        let digits = matches.value_of("digits").unwrap();
+        let period = u64::from_str(matches.value_of("period").unwrap()).unwrap();
+        let algorithm = matches.value_of("algorithm").unwrap();
+        let num = u32::from_str(digits);
+        if (digits == "s") {
+            let out = totp(secret, period, Digits::Steam);
+            println!("{}", out);
+        } else {
+            let out = match num {
+                Ok(n) => totp(secret, period, Digits::Digit(n)),
+                Err(_) => panic!("Invalid digits!")
+            };
+            println!("{}", out);
+        }
+    }
 }
