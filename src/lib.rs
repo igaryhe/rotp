@@ -44,7 +44,7 @@ impl From<&str> for Algo {
             "sha1" => Algo::Sha1,
             "sha256" => Algo::Sha256,
             "sha512" => Algo::Sha512,
-            _ => unreachable!("Unexpected algorithm"),
+            _ => panic!("Unexpected algorithm"),
         }
     }
 }
@@ -85,7 +85,7 @@ impl<D: Clone> InnerDigest for Hmac<D>
 
 fn base32_decode(secret: &str) -> Vec<u8> {
     decode(Alphabet::RFC4648 {padding: true}, &secret.to_ascii_lowercase())
-        .unwrap()
+        .expect("Unable to decode base32 secret")
 }
 
 fn digest(bytes: Vec<u8>, counter: u64, algo: Algo) -> Vec<u8> {
@@ -145,10 +145,10 @@ pub fn totp(secret: &str, time_step: u64, digits: Digits, algo: Algo) -> String 
 }
 
 pub fn parse_queries(uri: &str) -> HashMap<String, String> {
-    let url = Url::parse(uri).unwrap();
+    let url = Url::parse(uri).expect("Wrong URI format");
     let mut pairs = url.query_pairs();
     let mut query = HashMap::new();
-    let scheme = url.host_str().unwrap().to_string();
+    let scheme = url.host_str().expect("Wrong URI format").to_string();
     query.insert("method".to_string(), scheme);
     let count = pairs.count();
     for _ in 0..count {
@@ -156,7 +156,7 @@ pub fn parse_queries(uri: &str) -> HashMap<String, String> {
         match q {
             Some((Cow::Borrowed(name), Cow::Borrowed(value)))
                 => query.insert(name.to_string(), value.to_string()),
-            _ => panic!("")
+            _ => panic!("Wrong method")
         };
     }
     if query["method"] == "totp" {
@@ -170,7 +170,7 @@ pub fn parse_queries(uri: &str) -> HashMap<String, String> {
 pub fn validate(query: HashMap<String, String>) -> Otp {
     let digits = match query["digits"].as_str() {
         "s" => Digits::Steam,
-        n => Digits::Digit(n.parse().unwrap())
+        n => Digits::Digit(n.parse().expect("Digits need to be an integer range from 1 to 9 or a character s"))
     };
     let secret = query["secret"].clone();
     if query["method"] == "totp" {
@@ -178,7 +178,8 @@ pub fn validate(query: HashMap<String, String>) -> Otp {
            method: Method::Totp,
            secret,
            digits,
-           period: Some(query["period"].parse().unwrap()),
+           period: Some(query["period"].parse()
+                        .expect("Invalid period format, need to be an integer")),
            algorithm: query["algorithm"].as_str().into(),
            counter: None
        }
@@ -189,7 +190,8 @@ pub fn validate(query: HashMap<String, String>) -> Otp {
             digits,
             period: None,
             algorithm: Algo::Sha1,
-            counter: Some(query["counter"].parse().unwrap())
+            counter: Some(query["counter"].parse()
+                          .expect("Invalid period format, need to be an interer"))
         }
     }
     else {panic!("");}
