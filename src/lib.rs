@@ -1,16 +1,11 @@
-use base32::{Alphabet, decode};
 use sha1::Sha1;
 use sha2::*;
 use hmac::{Hmac, Mac};
-use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
-use std::io::Cursor;
-use time::get_time;
+use byteorder::BigEndian;
 use std::string::String;
 use generic_array;
 use digest::{Input, BlockInput, FixedOutput, Reset};
 use std::fmt::Debug;
-use url::Url;
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub enum Digits {
@@ -24,18 +19,12 @@ pub enum Algo {
     Sha512,
 }
 
-pub enum Method {
-    Hotp,
-    Totp
-}
-
 pub struct Otp {
-    pub method: Method,
     pub secret: String,
     pub digits: Digits,
     pub algorithm: Algo,
     pub period: Option<u64>,
-    pub counter: Option<u64>
+    pub counter: u64
 }
 
 impl From<&str> for Algo {
@@ -84,11 +73,14 @@ impl<D: Clone> InnerDigest for Hmac<D>
 }
 
 fn base32_decode(secret: &str) -> Vec<u8> {
+    use base32::{Alphabet, decode};
     decode(Alphabet::RFC4648 {padding: true}, &secret.to_ascii_lowercase())
         .expect("Unable to decode base32 secret")
 }
 
 fn digest(bytes: Vec<u8>, counter: u64, algo: Algo) -> Vec<u8> {
+    use byteorder::WriteBytesExt;
+    
     let mut ctr = vec![];
     ctr.write_u64::<BigEndian>(counter).unwrap();
 
@@ -102,6 +94,8 @@ fn truncate(code: Vec<u8>) -> usize {
 }
 
 fn extract31(code: Vec<u8>, offset: usize) -> u32 {
+    use byteorder::ReadBytesExt;
+    use std::io::Cursor;
     let sbit_hex = &code[offset..offset + 4];
     let mut cur = Cursor::new(sbit_hex);
     cur.read_u32::<BigEndian>().unwrap() << 1 >> 1
@@ -127,24 +121,27 @@ fn hotp_helper(secret: &str, counter: u64, algo: Algo) -> u32 {
     extract31(code, offset) % 0x7fffffff
 }
 
-pub fn hotp(secret: &str, counter: u64, digits: Digits, algo: Algo) -> String {
-    match digits {
-        Digits::Steam => steam_gen(hotp_helper(secret, counter, algo)),
-        Digits::Digit(n) => (hotp_helper(secret, counter, algo) % 10u32.pow(n))
+pub fn otp(otp: Otp) -> String {
+    match otp.digits {
+        Digits::Steam =>
+            steam_gen(hotp_helper(&otp.secret, otp.counter, otp.algorithm)),
+        Digits::Digit(n) =>
+            (hotp_helper(&otp.secret, otp.counter, otp.algorithm) % 10u32.pow(n))
             .to_string(),
     }
 }
 
 fn time_to_counter(time_step: u64) -> u64 {
+    use time::get_time;
+    
     let time = get_time().sec;
     (time as u64) / time_step
 }
 
-pub fn totp(secret: &str, time_step: u64, digits: Digits, algo: Algo) -> String {
-    hotp(secret, time_to_counter(time_step), digits, algo)
-}
-
 pub fn parse_queries(uri: &str) -> HashMap<String, String> {
+    use url::Url;
+    use std::borrow::Cow;
+    
     let url = Url::parse(uri).expect("Wrong URI format");
     let mut pairs = url.query_pairs();
     let mut query = HashMap::new();
@@ -170,29 +167,28 @@ pub fn parse_queries(uri: &str) -> HashMap<String, String> {
 pub fn validate(query: HashMap<String, String>) -> Otp {
     let digits = match query["digits"].as_str() {
         "s" => Digits::Steam,
-        n => Digits::Digit(n.parse().expect("Digits need to be an integer range from 1 to 9 or a character s"))
+        n => Digits::Digit(n.parse()
+                           .expect("Digits need to be an integer range from 1 to 9 or a character s"))
     };
     let secret = query["secret"].clone();
     if query["method"] == "totp" {
        Otp {
-           method: Method::Totp,
            secret,
            digits,
            period: Some(query["period"].parse()
                         .expect("Invalid period format, need to be an integer")),
            algorithm: query["algorithm"].as_str().into(),
-           counter: None
+           counter: time_to_counter(query["period"].parse().unwrap())
        }
     } else if query["method"] == "hotp" {
         Otp {
-            method: Method::Hotp,
             secret,
             digits,
             period: None,
             algorithm: Algo::Sha1,
-            counter: Some(query["counter"].parse()
-                          .expect("Invalid period format, need to be an interer"))
+            counter: query["counter"].parse()
+                .expect("Invalid period format, need to be an integer")
         }
     }
-    else {panic!("");}
+    else {panic!("Wrong method");}
 }
