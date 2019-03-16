@@ -7,6 +7,7 @@ use generic_array;
 use digest::{Input, BlockInput, FixedOutput, Reset};
 use std::fmt::Debug;
 use std::collections::HashMap;
+use failure::{Error, Fail};
 
 pub enum Digits {
     Steam,
@@ -17,6 +18,24 @@ pub enum Algo {
     Sha1,
     Sha256,
     Sha512,
+}
+
+#[derive(Debug, Fail)]
+pub enum OtpUriParsingError {
+    #[fail(display = "invalid URI format")]
+    InvalidUriFormat,
+    #[fail(display = "invalid otp method")]
+    InvalidMethod,
+    #[fail(display = "invalid algorithm")]
+    InvalidAlgorithm,
+    #[fail(display = "invalid digits: {}", _0)]
+    InvalidDigits(String),
+    #[fail(display = "invalid secret: {}", _0)]
+    InvalidSecret(String),
+    #[fail(display = "invalid counter")]
+    InvalidCounter,
+    #[fail(display = "invalid period")]
+    InvalidPeriod
 }
 
 pub struct Otp {
@@ -33,7 +52,7 @@ impl From<&str> for Algo {
             "sha1" => Algo::Sha1,
             "sha256" => Algo::Sha256,
             "sha512" => Algo::Sha512,
-            _ => panic!("Unexpected algorithm"),
+            _ => unreachable!("Unexpected algorithm"),
         }
     }
 }
@@ -72,10 +91,15 @@ impl<D: Clone> InnerDigest for Hmac<D>
     }
 }
 
-fn base32_decode(secret: &str) -> Vec<u8> {
+fn base32_decode(secret: &str) -> Result<Vec<u8>, Error> {
     use base32::{Alphabet, decode};
-    decode(Alphabet::RFC4648 {padding: true}, &secret.to_ascii_lowercase())
-        .expect("Unable to decode base32 secret")
+
+    match decode(Alphabet::RFC4648 {padding: true},
+                 &secret.to_ascii_lowercase()) {
+        Some(n) => Ok(n),
+        None => Err(OtpUriParsingError::InvalidSecret(
+            secret.to_string()).into())
+    }
 }
 
 fn digest(bytes: Vec<u8>, counter: u64, algo: Algo) -> Vec<u8> {
@@ -114,20 +138,25 @@ fn steam_gen(decimal: u32) -> String {
     code
 }
 
-fn hotp_helper(secret: &str, counter: u64, algo: Algo) -> u32 {
-    let bytes = base32_decode(secret);
+fn hotp_helper(secret: &str, counter: u64, algo: Algo) ->
+    Result<u32, Error> {
+    let bytes = base32_decode(secret)?;
     let code = digest(bytes, counter, algo);
     let offset = truncate(code.clone());
-    extract31(code, offset) % 0x7fffffff
+    Ok(extract31(code, offset) % 0x7fffffff)
 }
 
-pub fn otp(otp: Otp) -> String {
+pub fn otp(otp: Otp) -> Result<String, Error>  {
     match otp.digits {
         Digits::Steam =>
-            steam_gen(hotp_helper(&otp.secret, otp.counter, otp.algorithm)),
+            Ok(steam_gen(hotp_helper(&otp.secret,
+                                     otp.counter,
+                                     otp.algorithm)?)),
         Digits::Digit(n) =>
-            (hotp_helper(&otp.secret, otp.counter, otp.algorithm) % 10u32.pow(n))
-            .to_string(),
+            Ok((hotp_helper(&otp.secret,
+                            otp.counter,
+                            otp.algorithm)? % 10u32.pow(n))
+            .to_string()),
     }
 }
 
@@ -138,14 +167,21 @@ fn time_to_counter(time_step: u64) -> u64 {
     (time as u64) / time_step
 }
 
-pub fn parse_queries(uri: &str) -> HashMap<String, String> {
+pub type Dict = HashMap<String, String>;
+
+pub fn parse_queries(uri: &str) -> Result<Dict, Error> {
     use url::Url;
     use std::borrow::Cow;
-    
-    let url = Url::parse(uri).expect("Wrong URI format");
+
+    let replaced_uri = uri.replace("+", "2B%");
+    let url = Url::parse(replaced_uri.as_str())
+        .map_err(|_| OtpUriParsingError::InvalidUriFormat)?;
     let mut pairs = url.query_pairs();
     let mut query = HashMap::new();
-    let scheme = url.host_str().expect("Wrong URI format").to_string();
+    let scheme = match url.host_str() {
+        Some(n) => n.to_string(),
+        None => return Err(OtpUriParsingError::InvalidMethod.into())
+    };
     query.insert("method".to_string(), scheme);
     let count = pairs.count();
     for _ in 0..count {
@@ -153,42 +189,52 @@ pub fn parse_queries(uri: &str) -> HashMap<String, String> {
         match q {
             Some((Cow::Borrowed(name), Cow::Borrowed(value)))
                 => query.insert(name.to_string(), value.to_string()),
-            _ => panic!("Wrong method")
+            _ => return Err(OtpUriParsingError::InvalidMethod.into())
         };
     }
+    query.entry("digits".to_string()).or_insert("6".to_string());
+    query.entry("algorithm".to_string()).or_insert("sha1".to_string());
+    if query["method"] != "totp" && query["method"] != "hotp" {
+        return Err(OtpUriParsingError::InvalidMethod.into())
+    }
     if query["method"] == "totp" {
-        query.entry("algorithm".to_string()).or_insert("sha1".to_string());
-        query.entry("digits".to_string()).or_insert("6".to_string());
         query.entry("period".to_string()).or_insert("30".to_string());
     }
-    query
+    Ok(query)
 }
 
-pub fn validate(query: HashMap<String, String>) -> Otp {
+pub fn validate(query: HashMap<String, String>) -> Result<Otp, Error> {
     let digits = match query["digits"].as_str() {
         "s" => Digits::Steam,
-        n => Digits::Digit(n.parse()
-                           .expect("Digits need to be an integer range from 1 to 9 or a character s"))
+        n => Digits::Digit(n.parse::<u32>().map_err(|_|
+        OtpUriParsingError::InvalidDigits(n.to_string()))?)
     };
     let secret = query["secret"].clone();
-    if query["method"] == "totp" {
-       Otp {
+    if query["method"] == "totp" {   
+        let period = query["period"].parse::<u64>()
+            .map_err(|_| OtpUriParsingError::InvalidPeriod)?;
+        let al = query["algorithm"].to_lowercase();
+        let algorithm = al.as_str();
+        match algorithm {
+            "sha1" | "sha256"| "sha512" => (),
+            _ => return Err(OtpUriParsingError::InvalidAlgorithm.into())
+        }
+       Ok(Otp {
            secret,
            digits,
-           period: Some(query["period"].parse()
-                        .expect("Invalid period format, need to be an integer")),
-           algorithm: query["algorithm"].as_str().into(),
-           counter: time_to_counter(query["period"].parse().unwrap())
-       }
+           period: Some(period),
+           algorithm: algorithm.into(),
+           counter: time_to_counter(period)
+       })
     } else if query["method"] == "hotp" {
-        Otp {
+        Ok(Otp {
             secret,
             digits,
             period: None,
             algorithm: Algo::Sha1,
-            counter: query["counter"].parse()
-                .expect("Invalid period format, need to be an integer")
-        }
+            counter: query["counter"].parse::<u64>()
+        .map_err(|_| OtpUriParsingError::InvalidCounter)?
+        })
     }
-    else {panic!("Wrong method");}
+    else {return Err(OtpUriParsingError::InvalidMethod.into())}
 }
