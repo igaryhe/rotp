@@ -153,10 +153,9 @@ pub fn otp(otp: Otp) -> Result<String, Error>  {
                                      otp.counter,
                                      otp.algorithm)?)),
         Digits::Digit(n) =>
-            Ok((hotp_helper(&otp.secret,
+            Ok(format!("{number:>0width$}", number = hotp_helper(&otp.secret,
                             otp.counter,
-                            otp.algorithm)? % 10u32.pow(n))
-            .to_string()),
+                            otp.algorithm)? % 10u32.pow(n), width = n as usize)),
     }
 }
 
