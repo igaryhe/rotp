@@ -172,23 +172,19 @@ pub fn parse_queries(uri: &str) -> Result<Dict, Error> {
     use url::Url;
     use std::borrow::Cow;
 
-    let replaced_uri = uri.replace("+", "2B%");
+    let replaced_uri = uri.replace("+", "%2B");
     let url = Url::parse(replaced_uri.as_str())
         .map_err(|_| OtpUriParsingError::InvalidUriFormat)?;
-    let mut pairs = url.query_pairs();
+    let pairs = url.query_pairs();
     let mut query = HashMap::new();
     let scheme = match url.host_str() {
         Some(n) => n.to_string(),
         None => return Err(OtpUriParsingError::InvalidMethod.into())
     };
     query.insert("method".to_string(), scheme);
-    let count = pairs.count();
-    for _ in 0..count {
-        let q = pairs.next();
-        match q {
-            Some((Cow::Borrowed(name), Cow::Borrowed(value)))
-                => query.insert(name.to_string(), value.to_string()),
-            _ => return Err(OtpUriParsingError::InvalidMethod.into())
+    for pair in pairs {
+        if let (Cow::Borrowed(name), Cow::Borrowed(value)) = pair {
+          query.insert(name.to_string(), value.to_string());
         };
     }
     query.entry("digits".to_string()).or_insert("6".to_string());
